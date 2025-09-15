@@ -6,6 +6,12 @@
 
   function log(...args) { console.debug('[Vinted Cloner]', ...args); }
 
+  // Cache created-at labels per item id to avoid repeated fetch/inserts
+  const createdAtCache = new Map();
+  // Cache of full wardrobe items returned via our own fetch
+  const wardrobeItemMap = new Map();
+  let wardrobeFetched = false;
+
   function ensureStyles() {
     if (document.getElementById('vinted-republish-style')) return;
     const style = document.createElement('style');
@@ -103,6 +109,112 @@
         resolve({});
       }
     });
+  }
+
+  // Extract member id from URL or cookie
+  function getMemberId() {
+    try {
+      const m = (location.pathname || '').match(/\/member\/(\d+)/);
+      if (m) return m[1];
+    } catch (_) {}
+    const vuid = getCookie('v_uid');
+    return vuid && /^(\d+)$/.test(vuid) ? vuid : null;
+  }
+
+  async function fetchWardrobeAndAnnotate() {
+    if (wardrobeFetched) return;
+    const memberId = getMemberId();
+    if (!memberId) return;
+    wardrobeFetched = true;
+    let csrf = null;
+    try { csrf = await getCsrf(); } catch (_) { csrf = null; }
+    let anonId = getCookie('anon_id');
+    if (!anonId) {
+      try { const bg = await getTokensFromBg(); anonId = (bg && bg.anonId) || null; } catch (_) {}
+    }
+    const params = new URLSearchParams({ page: '1', per_page: '20', order: 'relevance' }).toString();
+    try {
+      const res = await fetch(`https://www.vinted.fr/api/v2/wardrobe/${memberId}/items?${params}`, {
+        credentials: 'include',
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
+          ...(anonId ? { 'x-anon-id': anonId } : {}),
+          'referer': location.href,
+        },
+      });
+      if (!res.ok) return;
+      const j = await res.json().catch(() => null);
+      const items = (j && j.items) || [];
+      for (const it of items) {
+        const id = it && it.id; if (!id) continue;
+        wardrobeItemMap.set(String(id), it);
+        const comp = computeDaysFromPhotos(it);
+        if (!comp) continue;
+        const label = formatDaysFr(comp.days);
+        createdAtCache.set(String(id), label);
+      }
+      // After caching labels, try to render them in the current DOM
+      applyCreatedLabels();
+    } catch (_) {
+      // ignore fetch errors
+    }
+  }
+
+  function getDescriptionContainerById(id) {
+    // Primary selector (as per provided HTML): data-testid="product-item-id-<id>--description--content"
+    const exact = document.querySelector(`[data-testid="product-item-id-${id}--description--content"]`);
+    if (exact) return exact;
+    // Fallback older layout
+    const compat = document.querySelector(`[data-testid="product-item-id-${id}--description"] .web_ui__Cell__body`);
+    if (compat) return compat;
+    return null;
+  }
+
+  function computeDaysFromPhotos(item) {
+    const photos = (item && item.photos) || [];
+    let ts = null;
+    for (const p of photos) {
+      const hr = p && p.high_resolution;
+      let t = hr && hr.timestamp;
+      if (t != null) {
+        const num = typeof t === 'number' ? t : parseInt(String(t), 10);
+        if (!Number.isNaN(num)) {
+          ts = ts == null ? num : Math.min(ts, num);
+        }
+      }
+    }
+    if (ts == null) return null;
+    // Timestamps appear to be epoch seconds in examples
+    const created = new Date(ts * 1000);
+    const now = new Date();
+    const days = Math.max(0, Math.floor((now - created) / 86400000));
+    return { days, created };
+  }
+
+  function formatDaysFr(days) {
+    if (days <= 0) return "Aujourd’hui";
+    if (days === 1) return "Il y a 1 jour";
+    return `il y a ${days} jours`;
+  }
+
+  function insertCreatedAtLine(container, label) {
+    if (!container) return;
+    if (container.querySelector('.vinted-created-at')) return; // avoid duplicates
+    const wrap = document.createElement('div');
+    wrap.className = 'new-item-box__description vinted-created-at';
+    const p = document.createElement('p');
+    p.className = 'web_ui__Text__text web_ui__Text__caption web_ui__Text__left web_ui__Text__truncated';
+    p.textContent = label;
+    wrap.appendChild(p);
+    container.appendChild(wrap);
+  }
+
+  function applyCreatedLabels() {
+    for (const [id, label] of createdAtCache.entries()) {
+      const desc = getDescriptionContainerById(id);
+      if (desc) insertCreatedAtLine(desc, label);
+    }
   }
 
   async function getCsrf() {
@@ -402,6 +514,8 @@
 
   function injectButtons() {
   ensureStyles();
+  // Fetch the wardrobe page once to annotate items without per-item calls
+  fetchWardrobeAndAnnotate();
     const bumped = document.querySelectorAll(BOOST_BUTTON_SELECTOR);
     let count = 0;
     for (const b of bumped) {
@@ -424,8 +538,12 @@
     b.parentElement.appendChild(btn);
         count++;
       }
+      // Try to render any known labels for visible items
+      applyCreatedLabels();
     }
     if (count > 0) log('Injected', count, 'republish buttons');
+    // Final pass in case new nodes appeared
+    applyCreatedLabels();
   }
 
   // Initial and dynamic updates
