@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Vinted Item Cloner",
+  "version": "0.1.0",
+  "description": "Adds a 'Republish' button on Vinted member pages to clone an item.",
+  "permissions": ["scripting", "activeTab", "webRequest", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://www.vinted.fr/*",
+    "https://images*.vinted.net/*",
+    "https://images*.vinted.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.vinted.fr/member/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
