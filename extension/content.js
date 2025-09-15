@@ -291,7 +291,7 @@
   btn.disabled = true; btn.classList.add('is-loading'); btn.textContent = 'Republishing…';
   const csrf = await getCsrf();
   const base = await getItemDetails(itemId, csrf);
-      const tempUuid = uuidv4();
+  const tempUuid = uuidv4();
       const photoUrls = pickPhotos(base);
       const assigned = [];
       for (const u of photoUrls) {
@@ -301,9 +301,12 @@
           if (up && up.id) assigned.push({ id: up.id, orientation: up.orientation || 0 });
         } catch (e) { log('photo upload failed', e); }
       }
-      const priceObj = base.price || {};
-      const priceNum = base.price_numeric || parseFloat(priceObj.amount || '0') || 0;
-      const currency = base.price_currency || priceObj.currency_code || base.currency || 'EUR';
+    const priceObj = base.price || {};
+    const priceNum = base.price_numeric || parseFloat(priceObj.amount || '0') || 0;
+    const currency = base.price_currency || priceObj.currency_code || base.currency || 'EUR';
+  const colorIds = base.color_ids || [base.color1_id, base.color2_id].filter(Boolean);
+  const brandTitleRaw = base.brand_title || base.brand || (base.brand_dto && base.brand_dto.title) || null;
+  const brandTitle = (brandTitleRaw && String(brandTitleRaw).trim()) ? brandTitleRaw : null;
       const payload = {
         item: {
           id: null,
@@ -312,31 +315,65 @@
           title: base.title || '',
           description: base.description || '',
           brand_id: base.brand_id || null,
-          brand: base.brand_title || base.brand || null,
+      brand: brandTitle,
           size_id: base.size_id || null,
           catalog_id: base.catalog_id || null,
+      // optional book/media fields
+      isbn: base.isbn || null,
+      author: base.author || null,
+      book_title: base.book_title || null,
+      model: base.model || null,
+      video_game_rating_id: base.video_game_rating_id || null,
           is_unisex: Boolean(base.is_unisex),
           status_id: base.status_id || 1,
           price: priceNum,
           package_size_id: base.package_size_id || 1,
           shipment_prices: { domestic: null, international: null },
-          color_ids: base.color_ids || [],
+      color_ids: colorIds || [],
           assigned_photos: assigned,
           item_attributes: base.item_attributes || [],
           manufacturer: base.manufacturer || null,
           manufacturer_labelling: base.manufacturer_labelling || null,
+      // measurements if present
+      measurement_length: base.measurement_length != null ? base.measurement_length : null,
+      measurement_width: base.measurement_width != null ? base.measurement_width : null,
+    measurement_unit: base.measurement_unit != null ? base.measurement_unit : null,
         },
         feedback_id: null,
         push_up: false,
         parcel: null,
         upload_session_id: tempUuid,
       };
+      // Build a summary of the original (to show if create fails after deletion)
+      const deletedSummary = {
+        id: base.id || itemId,
+        title: base.title || '',
+        description: base.description || '',
+        price: priceNum,
+        currency,
+        brand_id: base.brand_id || null,
+        brand: brandTitle,
+        size_id: base.size_id || null,
+        catalog_id: base.catalog_id || null,
+        color_ids: colorIds || [],
+        isbn: base.isbn || null,
+        author: base.author || null,
+        book_title: base.book_title || null,
+        model: base.model || null,
+        video_game_rating_id: base.video_game_rating_id || null,
+        measurement_length: base.measurement_length != null ? base.measurement_length : null,
+        measurement_width: base.measurement_width != null ? base.measurement_width : null,
+        measurement_unit: base.measurement_unit != null ? base.measurement_unit : null,
+        photos: photoUrls,
+      };
   if (!assigned.length) {
         throw new Error('No photos could be uploaded; aborting create to avoid 400.');
       }
   // Delete the original item BEFORE creating the clone, as requested
   btn.textContent = 'Deleting…';
+  let originalDeleted = false;
   await deleteItem(csrf, itemId);
+  originalDeleted = true;
   btn.textContent = 'Creating…';
   const created = await createItem(csrf, payload);
   alert('Item cloned. New ID: ' + (created && created.item && created.item.id ? created.item.id : 'unknown'));
@@ -344,7 +381,20 @@
   window.location.reload();
     } catch (e) {
       console.error(e);
-      alert('Failed to republish: ' + (e && e.message ? e.message : e));
+      // If we already deleted the original, surface its data to the user
+      try {
+        // Access variables if defined in this scope
+        if (typeof originalDeleted !== 'undefined' && originalDeleted === true && typeof deletedSummary !== 'undefined') {
+          const text = JSON.stringify(deletedSummary, null, 2);
+          // Attempt to copy to clipboard for convenience
+          try { await navigator.clipboard.writeText(text); } catch (_) {}
+          alert('Failed to republish after deletion. Original item data (copied to clipboard if permitted):\n' + text);
+        } else {
+          alert('Failed to republish: ' + (e && e.message ? e.message : e));
+        }
+      } catch (_) {
+        alert('Failed to republish: ' + (e && e.message ? e.message : e));
+      }
     } finally {
   btn.disabled = false; btn.classList.remove('is-loading'); btn.textContent = 'Republier';
     }
