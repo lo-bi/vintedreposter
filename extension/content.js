@@ -21,8 +21,9 @@
       .vinted-republish-btn.is-loading { opacity: 0.6; pointer-events: none; }
       .vinted-relist-notice { 
         box-sizing: border-box;
-        width: 100%;
-        margin: 12px 0;
+        width: auto;
+        max-width: 420px;
+        margin: 0;
         padding: 12px 14px;
         border-radius: 8px;
         font-size: 14px;
@@ -30,24 +31,25 @@
       }
       .vinted-relist-notice.is-success { background: #e6f7ee; color: #0f5132; border: 1px solid #a3e4c4; }
       .vinted-relist-notice.is-error { background: #fdecea; color: #842029; border: 1px solid #f5c2c7; }
+      .vinted-relist-toast {
+        position: fixed;
+        bottom: 16px;
+        right: 16px;
+        z-index: 2147483647;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+      }
     `;
     document.head.appendChild(style);
   }
 
   function showNotice(message, type = 'success') {
-    // Prefer inserting before the listings wrapper to keep it visible
-    const wrapper = document.querySelector('.profile__items-wrapper');
-    const host = (wrapper && wrapper.parentElement) || document.querySelector('#tabs') || document.body;
+    // Toast popup appended to body (fixed position)
     let el = document.getElementById('vinted-relist-notice');
     if (!el) {
       el = document.createElement('div');
       el.id = 'vinted-relist-notice';
-      el.className = 'vinted-relist-notice';
-      if (wrapper && wrapper.parentElement) {
-        wrapper.parentElement.insertBefore(el, wrapper);
-      } else if (host && host.appendChild) {
-        host.appendChild(el);
-      }
+      el.className = 'vinted-relist-notice vinted-relist-toast';
+      document.body.appendChild(el);
     }
     el.classList.remove('is-success', 'is-error');
     el.classList.add(type === 'error' ? 'is-error' : 'is-success');
@@ -59,17 +61,6 @@
       clearTimeout(el._hideTimer);
       el._hideTimer = setTimeout(() => { if (el && el.parentElement) el.parentElement.removeChild(el); }, 6000);
     }
-    // Bring the notice into view, but scroll a bit further up to show context
-    try {
-      requestAnimationFrame(() => {
-        const rect = el.getBoundingClientRect();
-        const currentY = window.scrollY || window.pageYOffset || 0;
-        const targetTop = rect.top + currentY;
-        const extraOffset = 160; // scroll additional pixels above the notice
-        const y = Math.max(0, targetTop - extraOffset);
-        window.scrollTo({ top: y, behavior: 'smooth' });
-      });
-    } catch (_) {}
   }
 
   function findClosestItemId(el) {
@@ -234,16 +225,19 @@
       }
     }
     if (ts == null) return null;
-    // Timestamps appear to be epoch seconds in examples
-    const created = new Date(ts * 1000);
-    const now = new Date();
-    const days = Math.max(0, Math.floor((now - created) / 86400000));
-    return { days, created };
+  // Timestamps appear to be epoch seconds in examples
+  const created = new Date(ts * 1000);
+  // Use calendar-day difference (local) so "yesterday" shows as 1 even if < 24h
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const createdStart = new Date(created.getFullYear(), created.getMonth(), created.getDate());
+  const days = Math.max(0, Math.round((todayStart - createdStart) / 86400000));
+  return { days, created };
   }
 
   function formatDaysFr(days) {
     if (days <= 0) return "Created today";
-    return `Created ${days} ago`;
+    return `Created ${days} days ago`;
   }
 
   function insertCreatedAtLine(container, label) {
@@ -274,9 +268,9 @@
     if (fromBg && fromBg.csrf) return fromBg.csrf;
     // 3) Fallback: load items/new and parse token from HTML
     const res = await fetch('https://www.vinted.fr/items/new', { credentials: 'include' });
-    const html = await res.text();
-    const token = getCsrfFromHtml(html);
-    if (!token) throw new Error('Could not extract CSRF token');
+  const html = await res.text();
+  const token = getCsrfFromHtml(html);
+  if (!token) throw new Error('Could not extract CSRF token. Please refresh the page and try again.');
     return token;
   }
 
@@ -450,7 +444,7 @@
   async function republishFromButton(btn) {
     const itemId = findClosestItemId(btn);
     if (!itemId) {
-      alert('Could not determine item id');
+  showNotice('Could not determine item id', 'error');
       return;
     }
     try {
