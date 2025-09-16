@@ -19,8 +19,57 @@
     style.textContent = `
       .vinted-republish-btn { display: block !important; margin-top: 8px !important; }
       .vinted-republish-btn.is-loading { opacity: 0.6; pointer-events: none; }
+      .vinted-relist-notice { 
+        box-sizing: border-box;
+        width: 100%;
+        margin: 12px 0;
+        padding: 12px 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+      .vinted-relist-notice.is-success { background: #e6f7ee; color: #0f5132; border: 1px solid #a3e4c4; }
+      .vinted-relist-notice.is-error { background: #fdecea; color: #842029; border: 1px solid #f5c2c7; }
     `;
     document.head.appendChild(style);
+  }
+
+  function showNotice(message, type = 'success') {
+    // Prefer inserting before the listings wrapper to keep it visible
+    const wrapper = document.querySelector('.profile__items-wrapper');
+    const host = (wrapper && wrapper.parentElement) || document.querySelector('#tabs') || document.body;
+    let el = document.getElementById('vinted-relist-notice');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'vinted-relist-notice';
+      el.className = 'vinted-relist-notice';
+      if (wrapper && wrapper.parentElement) {
+        wrapper.parentElement.insertBefore(el, wrapper);
+      } else if (host && host.appendChild) {
+        host.appendChild(el);
+      }
+    }
+    el.classList.remove('is-success', 'is-error');
+    el.classList.add(type === 'error' ? 'is-error' : 'is-success');
+    el.setAttribute('role', 'alert');
+    el.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+    el.textContent = message;
+    // Auto-hide after a few seconds for non-error; keep errors visible longer
+    if (type !== 'error') {
+      clearTimeout(el._hideTimer);
+      el._hideTimer = setTimeout(() => { if (el && el.parentElement) el.parentElement.removeChild(el); }, 6000);
+    }
+    // Bring the notice into view, but scroll a bit further up to show context
+    try {
+      requestAnimationFrame(() => {
+        const rect = el.getBoundingClientRect();
+        const currentY = window.scrollY || window.pageYOffset || 0;
+        const targetTop = rect.top + currentY;
+        const extraOffset = 160; // scroll additional pixels above the notice
+        const y = Math.max(0, targetTop - extraOffset);
+        window.scrollTo({ top: y, behavior: 'smooth' });
+      });
+    } catch (_) {}
   }
 
   function findClosestItemId(el) {
@@ -193,9 +242,8 @@
   }
 
   function formatDaysFr(days) {
-    if (days <= 0) return "Aujourd’hui";
-    if (days === 1) return "Il y a 1 jour";
-    return `il y a ${days} jours`;
+    if (days <= 0) return "Created today";
+    return `Created ${days} ago`;
   }
 
   function insertCreatedAtLine(container, label) {
@@ -347,17 +395,23 @@
       method: 'POST',
       credentials: 'include',
       headers: {
+        'accept': 'application/json, text/plain, */*',
         'content-type': 'application/json',
         'x-csrf-token': csrf,
         'x-enable-multiple-size-groups': 'true',
         'x-upload-form': 'true',
         ...(anonId ? { 'x-anon-id': anonId } : {}),
+        'origin': location.origin,
+        'referer': location.href,
       },
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
       let body = '';
       try { body = await res.text(); } catch (_) {}
+      if (res.status === 403 && /captcha-delivery|__cf_chl|cf_chl|datadome/i.test(body || '')) {
+        throw new Error('Blocked by anti-bot (DataDome/Cloudflare). Please refresh the page, disable ad blockers, then try again.');
+      }
       throw new Error(`Create failed: ${res.status} ${body}`);
     }
     return res.json();
@@ -400,7 +454,7 @@
       return;
     }
     try {
-  btn.disabled = true; btn.classList.add('is-loading'); btn.textContent = 'Republishing…';
+  btn.disabled = true; btn.classList.add('is-loading'); btn.textContent = 'Relisting…';
   const csrf = await getCsrf();
   const base = await getItemDetails(itemId, csrf);
   const tempUuid = uuidv4();
@@ -488,9 +542,9 @@
   originalDeleted = true;
   btn.textContent = 'Creating…';
   const created = await createItem(csrf, payload);
-  alert('Item cloned. New ID: ' + (created && created.item && created.item.id ? created.item.id : 'unknown'));
-  // Refresh the page to reflect deletion and the new item
-  window.location.reload();
+  const newId = (created && created.item && created.item.id) ? created.item.id : 'unknown';
+  showNotice(`Item relisted successfully. Refreshing the page...`, 'success');
+  setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 1200);
     } catch (e) {
       console.error(e);
       // If we already deleted the original, surface its data to the user
@@ -500,15 +554,16 @@
           const text = JSON.stringify(deletedSummary, null, 2);
           // Attempt to copy to clipboard for convenience
           try { await navigator.clipboard.writeText(text); } catch (_) {}
-          alert('Failed to republish after deletion. Original item data (copied to clipboard if permitted):\n' + text);
+    showNotice('Failed to relist after deletion. Original item data was copied to clipboard if permitted. Details in console.', 'error');
+    console.error('Deleted original item data:', deletedSummary);
         } else {
-          alert('Failed to republish: ' + (e && e.message ? e.message : e));
+    showNotice('Failed to relist: ' + (e && e.message ? e.message : e), 'error');
         }
       } catch (_) {
-        alert('Failed to republish: ' + (e && e.message ? e.message : e));
+  showNotice('Failed to relist: ' + (e && e.message ? e.message : e), 'error');
       }
     } finally {
-  btn.disabled = false; btn.classList.remove('is-loading'); btn.textContent = 'Republier';
+  btn.disabled = false; btn.classList.remove('is-loading'); btn.textContent = 'Relist';
     }
   }
 
@@ -521,7 +576,7 @@
     for (const b of bumped) {
       // Avoid duplicate injection
       if (b.parentElement && b.parentElement.querySelector('.vinted-republish-btn')) continue;
-      const btn = makeButton('Republier');
+      const btn = makeButton('Relist');
       btn.classList.add('vinted-republish-btn');
       btn.addEventListener('click', e => {
         e.preventDefault();
@@ -530,7 +585,7 @@
       });
       // Insert next to Booster button
       if (b.parentElement) {
-    // Add an extra line/spacing between Booster and Republish
+  // Add an extra line/spacing between Booster and Relist
     const spacer = document.createElement('div');
     spacer.style.height = '8px';
     spacer.style.width = '100%';
@@ -541,7 +596,7 @@
       // Try to render any known labels for visible items
       applyCreatedLabels();
     }
-    if (count > 0) log('Injected', count, 'republish buttons');
+  if (count > 0) log('Injected', count, 'relist buttons');
     // Final pass in case new nodes appeared
     applyCreatedLabels();
   }
